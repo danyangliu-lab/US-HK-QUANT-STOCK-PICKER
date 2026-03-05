@@ -6,4 +6,7 @@ python-dateutil>=2.9.0
 scipy>=1.13.0
 openpyxl>=3.1.5
 tencentcloud-sdk-python>=3.0.1280
+tencentcloud-sdk-python-common>=3.0.0
+tencentcloud-sdk-python-lkeap>=3.0.0
 python-dotenv>=1.0.1
+futu-api>=9.1.0

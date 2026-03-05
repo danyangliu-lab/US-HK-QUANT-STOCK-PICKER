@@ -20,6 +20,7 @@ class MarketData:
     prices: pd.DataFrame
     volumes: pd.DataFrame
     fundamentals: pd.DataFrame
+    vix: pd.Series | None = None  # VIX恐慌指数收盘序列
 
 
 def _safe_float(v: object, default: float = np.nan) -> float:
@@ -186,4 +187,33 @@ def download_market_data(tickers: list[str], lookback_days: int = 320) -> Market
         fundamentals_df = pd.DataFrame(fundamentals).set_index("ticker") if fundamentals else pd.DataFrame()
         _save_cache(fundamentals_df, fund_cache)
 
-    return MarketData(prices=prices, volumes=volumes, fundamentals=fundamentals_df)
+    return MarketData(prices=prices, volumes=volumes, fundamentals=fundamentals_df, vix=_download_vix(prices))
+
+
+def _download_vix(prices: pd.DataFrame) -> pd.Series | None:
+    """下载 VIX 恐慌指数，与行情数据同时间范围对齐。"""
+    vix_cache = _cache_path(["^VIX"], "vix")
+    cached = _load_cache(vix_cache)
+    if cached is not None:
+        logger.info("使用今日VIX缓存")
+        vix = cached.squeeze()
+    else:
+        try:
+            start = prices.index[0].strftime("%Y-%m-%d")
+            end = (prices.index[-1] + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            vix_data = yf.download("^VIX", start=start, end=end, progress=False, auto_adjust=True)
+            if vix_data is None or vix_data.empty:
+                logger.warning("VIX 数据下载为空")
+                return None
+            vix = vix_data["Close"].squeeze()
+            if isinstance(vix, pd.DataFrame):
+                vix = vix.iloc[:, 0]
+            vix = vix.dropna()
+            _save_cache(vix.to_frame("vix"), vix_cache)
+            logger.info("VIX 数据下载完成: %d 条", len(vix))
+        except Exception as e:
+            logger.warning("VIX 数据下载失败: %s", e)
+            return None
+    if isinstance(vix, pd.DataFrame):
+        vix = vix.iloc[:, 0]
+    return vix.reindex(prices.index, method="ffill")

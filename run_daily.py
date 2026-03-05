@@ -44,29 +44,57 @@ def main() -> None:
     _setup_logging()
     _load_dotenv()
 
-    parser = argparse.ArgumentParser(description="成长+趋势 量化选股系统（日更版 v2）")
+    parser = argparse.ArgumentParser(description="成长+趋势 量化选股系统（日更版 v3 — 三模型交叉验证）")
     parser.add_argument("--out", default="outputs", help="输出目录")
-    parser.add_argument("--llm", action="store_true", help="启用混元LLM辅助评分")
+    parser.add_argument("--llm", action="store_true", help="启用LLM辅助评分（Kimi K2.5 + DeepSeek V3.2 + GLM-5）")
+    parser.add_argument("--no-kimi", action="store_true", help="禁用Kimi K2.5")
+    parser.add_argument("--no-deepseek", action="store_true", help="禁用DeepSeek V3.2")
+    parser.add_argument("--no-glm", action="store_true", help="禁用GLM-5")
+    parser.add_argument("--cross-mode", choices=["cross", "avg", "primary"], default=None,
+                        help="交叉验证模式: cross=方向融合(默认), avg=简单平均, primary=仅第一个可用模型")
+    parser.add_argument("--sync-moomoo", action="store_true",
+                        help="从 moomoo (富途) 同步持仓和自选股（需本地运行 OpenD）")
+    parser.add_argument("--sync-moomoo-portfolio-only", action="store_true",
+                        help="仅同步 moomoo 持仓（不同步自选股）")
+    parser.add_argument("--report", action="store_true",
+                        help="生成格式化研报（Markdown + DCF 估值汇总 CSV）")
     args = parser.parse_args()
 
     cfg = default_config()
+
+    # moomoo 同步
+    if args.sync_moomoo or args.sync_moomoo_portfolio_only:
+        from quant_system.moomoo_sync import MoomooConfig, sync_from_moomoo
+        moomoo_cfg = MoomooConfig.from_env()
+        if args.sync_moomoo_portfolio_only:
+            moomoo_cfg.sync_watchlist = False
+        cfg = sync_from_moomoo(cfg, moomoo_cfg)
     llm_cfg = LLMConfig.from_env()
     if args.llm:
         llm_cfg.enabled = True
+    if args.no_kimi:
+        llm_cfg.kimi_enabled = False
+    if args.no_deepseek:
+        llm_cfg.deepseek_enabled = False
+    if args.no_glm:
+        llm_cfg.glm_enabled = False
+    if args.cross_mode:
+        llm_cfg.cross_validation_mode = args.cross_mode
 
-    result = run_daily_pipeline(cfg=cfg, llm_cfg=llm_cfg, out_dir=args.out)
+    result = run_daily_pipeline(cfg=cfg, llm_cfg=llm_cfg, out_dir=args.out,
+                                enable_report=args.report)
 
     signal = result.signal_table
     print("\n" + "=" * 90)
-    print("  全部股票评分（按 final_score 从高到低）")
+    print("  📊 自选观察池 — AI推荐组合（按 final_score 从高到低）")
     print("=" * 90)
-    cols = ["name", "engine", "quant_score", "event_score", "final_score", "action"]
+    cols = ["name", "engine", "quant_score", "event_score", "analyst_rating", "final_score", "action"]
     cols = [c for c in cols if c in signal.columns]
     with pd.option_context("display.max_rows", None):
         print(signal[cols].to_string())
 
     print("\n" + "=" * 90)
-    print("  目标权重")
+    print("  📊 AI推荐 — 目标权重")
     print("=" * 90)
     if result.weights.empty:
         print("  无可分配权重")
@@ -77,7 +105,7 @@ def main() -> None:
     changed = result.diff_report[result.diff_report["signal_change"] != "UNCHANGED"]
     if not changed.empty:
         print("\n" + "=" * 90)
-        print("  信号变动（vs 昨日）")
+        print("  📊 AI推荐 — 信号变动（vs 昨日）")
         print("=" * 90)
         print(changed[["engine", "final_score", "signal_change"]].to_string())
 
@@ -85,7 +113,7 @@ def main() -> None:
     if result.tracking is not None:
         tk = result.tracking
         print("\n" + "=" * 90)
-        print("  组合收益跟踪")
+        print("  📊 AI推荐 — 组合收益跟踪")
         print("=" * 90)
         print(f"  本期收益: {tk.period_return * 100:+.2f}%")
         print(f"  累计收益: {tk.cumulative_return * 100:+.2f}%")
@@ -98,6 +126,42 @@ def main() -> None:
             detail["entry_price"] = detail["entry_price"].round(2)
             detail["current_price"] = detail["current_price"].round(2)
             print(detail.to_string(index=False))
+
+    # 持仓投资建议
+    if result.portfolio_report is not None and not result.portfolio_report.empty:
+        pf = result.portfolio_report
+        print("\n" + "=" * 90)
+        print("  💼 我的持仓 — 评分与投资建议")
+        print("=" * 90)
+        pf_cols = ["name", "engine", "quant_score", "final_score", "action",
+                   "advice_action", "advice_confidence", "advice_reason"]
+        pf_cols = [c for c in pf_cols if c in pf.columns]
+        with pd.option_context("display.max_rows", None, "display.max_colwidth", 60):
+            print(pf[pf_cols].to_string())
+
+        # 持仓整体分析
+        if result.portfolio_overall:
+            print("\n" + "-" * 90)
+            print("  💼 我的持仓 — 整体组合分析")
+            print("-" * 90)
+            print(result.portfolio_overall)
+
+    # DCF 估值汇总
+    if result.dcf_map:
+        from quant_system.dcf import dcf_summary_df
+        dcf_df = dcf_summary_df(result.dcf_map)
+        if not dcf_df.empty:
+            print("\n" + "=" * 90)
+            print("  💰 DCF 估值汇总")
+            print("=" * 90)
+            with pd.option_context("display.max_rows", None, "display.float_format", "{:.1f}".format):
+                print(dcf_df.to_string())
+
+    # 研报路径
+    if result.report_path:
+        print("\n" + "=" * 90)
+        print(f"  📝 研报已生成: {result.report_path}")
+        print("=" * 90)
 
     print(f"\n输出目录: {result.output_dir.resolve()}")
 

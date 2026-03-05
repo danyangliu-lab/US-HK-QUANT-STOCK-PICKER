@@ -16,8 +16,9 @@ class StrategyConfig:
 
     # 风控（激进风格：放宽单票和杠杆上限）
     max_weight_growth: float = 0.12
-    max_weight_bluechip: float = 0.15
     max_weight_leverage: float = 0.10
+    max_weight_smallcap: float = 0.06       # 小盘投机单票上限（小仓位高赔率）
+    max_smallcap_total: float = 0.15        # 小盘投机池总仓位上限
     max_industry_weight: float = 0.40
     max_leverage_etf_total: float = 0.25
 
@@ -26,42 +27,62 @@ class StrategyConfig:
     min_score_to_buy: float = 55
     min_score_to_hold: float = 45
 
-    # 股票池
-    # 成长池：高增速 / 趋势动量强 / 中小至大市值成长股
+    # ── 自选观察池 ──
+    # 成长池：统一使用成长+趋势引擎评估所有个股
     growth_tickers: list[str] = field(default_factory=lambda: [
         # 原成长
-        "PLTR", "NEOV", "AAOI", "WOLF", "COHR", "NBIS", "CLS", "LITE", "VRT", "GEV",
-        # 从蓝筹移入（增速高、波动大、更偏成长逻辑）
-        "NVDA", "AMD", "TSLA", "MU",
+        "PLTR", "COHR", "NBIS", "CLS", "LITE", "VRT", "GEV",
+        # 高增速大市值（成长逻辑）
+        "NVDA", "AMD", "MU",
         # 新增自选
-        "CRCL", "CLPT", "NVTS", "SNDK", "CNQ",
+        "SNDK", "CNQ",
         # 新增自选 - 工业/矿业成长
         "ALM", "IPGP",
-        # 新增自选 - 半导体封测/自动驾驶/油服
-        "AUR", "KLIC", "ASX", "AMKR", "PUMP",
-        # 港股成长
-        "2706.HK",
-    ])
-    # 蓝筹池：大市值 / 稳定现金流（蓝筹引擎也会评估成长性）
-    bluechip_tickers: list[str] = field(default_factory=lambda: [
+        # 新增自选 - 半导体封测/油服
+        "KLIC", "ASX", "AMKR", "PUMP",
+        # 新增自选 - 国防/无人机
+        "KTOS", "AVAV",
+        # 新增自选 - 资源/国防
+        "SCCO", "ALB", "LMT",
+        # 大市值（统一成长+趋势逻辑评估）
         "AAPL", "MSFT", "AMZN", "AVGO", "ORCL", "XLE", "B",
-        # 新增自选 - 资源/化工蓝筹
-        "SCCO", "ALB",
-    ])
-    # 港股池（使用蓝筹引擎评估）
-    hk_bluechip_tickers: list[str] = field(default_factory=lambda: [
-        "0700.HK", "9988.HK",
+        # 新增自选 - 光通信/特种材料/可观测性/铜矿
+        "DY", "ATI", "FN", "COPX",
+        # 港股
+        "0700.HK", "9988.HK", "2706.HK",
     ])
     # 杠杆ETF池（纯趋势+波动率引擎）
     leverage_etf_tickers: list[str] = field(default_factory=lambda: [
-        "SOXL", "DFEN", "NVTX", "LITX", "SNXX", "7747.HK", "7709.HK",
+        "SOXL", "DFEN", "LITX", "SNXX", "7747.HK", "7709.HK",
+        # 新增自选 - 国防/无人机/通信杠杆
+        "ONDL", "KTUP", "AVXX", "LMTL",
+    ])
+
+    # ── 小盘投机池（市值<10亿美金，小仓位高赔率）──
+    smallcap_tickers: list[str] = field(default_factory=lambda: [
+        "WOLF", "NVTS", "NEOV", "AAOI", "CLPT",
+        "ONDS", "AUR", "CRCL",
+    ])
+
+    # ── 持仓股票池（当前实际持仓，会额外生成投资建议）──
+    portfolio_stock_tickers: list[str] = field(default_factory=lambda: [
+        "CLS", "XLE", "ORCL", "AMD", "COHR", "B",
+        "CNQ", "ALM",
+        "2706.HK",
+    ])
+    portfolio_leverage_tickers: list[str] = field(default_factory=lambda: [
+        "7747.HK", "LMTL", "KTUP", "7709.HK", "ONDL", "SNXX", "LITX",
+        "AVXX",
     ])
 
     # 杠杆ETF → 底层股票映射（有底层的会引入底层基本面+技术面）
     leverage_underlying_map: dict[str, str] = field(default_factory=lambda: {
-        "NVTX": "NVTS",
         "LITX": "LITE",
         "SNXX": "SNDK",
+        "ONDL": "ONDS",
+        "KTUP": "KTOS",
+        "AVXX": "AVAV",
+        "LMTL": "LMT",
     })
 
     # 指数型杠杆ETF → 跟踪指数/参考ETF映射（用于引入指数技术面）
@@ -76,20 +97,19 @@ class StrategyConfig:
     leverage_sector_desc: dict[str, str] = field(default_factory=lambda: {
         "SOXL": "3倍做多半导体指数ETF，跟踪费城半导体指数(SOX)，受AI芯片需求、半导体周期、中美科技竞争、出口管制等影响",
         "DFEN": "3倍做多航空国防ETF，跟踪道琼斯航空国防指数，受地缘政治冲突(中东/俄乌)、美国国防预算、军工订单、战争风险等影响",
-        "NVTX": "2倍做多纳微半导体(NVTS)，功率半导体企业，受电动车/新能源需求驱动",
         "LITX": "2倍做多Lumentum(LITE)，光通信和3D传感龙头，受AI数据中心光模块需求驱动",
         "SNXX": "2倍做多闪迪(SNDK)，存储芯片企业，受NAND闪存价格周期和AI存储需求影响",
+        "ONDL": "2倍做多Ondas(ONDS)，工业物联网和无人机通信企业，受美国关键基础设施和国防通信需求驱动",
+        "KTUP": "2倍做多克瑞拓斯(KTOS)，无人系统和卫星通信国防企业，受无人机/太空军/国防预算驱动",
+        "AVXX": "2倍做多AeroVironment(AVAV)，小型无人机和巡飞弹龙头，受俄乌/中东战争无人机需求驱动",
+        "LMTL": "2倍做多洛克希德马丁(LMT)，全球最大国防承包商，受F-35/导弹防御/地缘冲突驱动",
         "7747.HK": "南方两倍做多纳指ETF，港股杠杆产品，跟踪纳斯达克100指数",
         "7709.HK": "南方两倍做多恒指ETF，港股杠杆产品，跟踪恒生指数",
     })
 
     sector_map: dict[str, str] = field(default_factory=lambda: {
-        # 蓝筹
-        "AAPL": "Tech", "MSFT": "Tech", "AVGO": "Tech", "ORCL": "Tech",
-        "AMZN": "Consumer", "XLE": "Energy", "B": "Materials",
-        "SCCO": "Materials", "ALB": "Materials",
         # 成长
-        "NVDA": "Tech", "AMD": "Tech", "MU": "Tech", "TSLA": "Auto",
+        "NVDA": "Tech", "AMD": "Tech", "MU": "Tech",
         "PLTR": "Tech", "AAOI": "Tech", "WOLF": "Tech", "COHR": "Tech",
         "NBIS": "Tech", "CLS": "Tech", "LITE": "Tech",
         "VRT": "Industrials", "GEV": "Industrials", "NEOV": "Energy",
@@ -97,22 +117,34 @@ class StrategyConfig:
         "SNDK": "Tech", "CNQ": "Energy",
         "ALM": "Materials", "IPGP": "Industrials",
         "AUR": "Auto", "KLIC": "Tech", "ASX": "Tech", "AMKR": "Tech", "PUMP": "Energy",
+        "KTOS": "Defense", "AVAV": "Defense", "ONDS": "Defense",
+        "SCCO": "Materials", "ALB": "Materials", "LMT": "Defense",
+        "DY": "Tech", "ATI": "Materials", "FN": "Tech", "COPX": "Materials",
+        # 大市值
+        "AAPL": "Tech", "MSFT": "Tech", "AVGO": "Tech", "ORCL": "Tech",
+        "AMZN": "Consumer", "XLE": "Energy", "B": "Materials",
         # 港股
         "0700.HK": "Tech", "9988.HK": "Tech",
         "2706.HK": "Tech",
         # 杠杆ETF
         "SOXL": "Leveraged", "DFEN": "Leveraged",
-        "NVTX": "Leveraged", "LITX": "Leveraged", "SNXX": "Leveraged",
+        "LITX": "Leveraged", "SNXX": "Leveraged",
+        "ONDL": "Leveraged", "KTUP": "Leveraged", "AVXX": "Leveraged", "LMTL": "Leveraged",
         "7747.HK": "Leveraged", "7709.HK": "Leveraged",
     })
+
+    @property
+    def portfolio_tickers(self) -> list[str]:
+        return list(dict.fromkeys(self.portfolio_stock_tickers + self.portfolio_leverage_tickers))
 
     @property
     def all_tickers(self) -> list[str]:
         ordered = (
             self.growth_tickers
-            + self.bluechip_tickers
-            + self.hk_bluechip_tickers
+            + self.smallcap_tickers
             + self.leverage_etf_tickers
+            + self.portfolio_stock_tickers
+            + self.portfolio_leverage_tickers
         )
         # 加入参考指数/ETF，用于杠杆引擎技术面分析
         ref_tickers = list(self.leverage_index_map.values())

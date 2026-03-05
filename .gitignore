@@ -4,3 +4,6 @@ cache/
 outputs/
 __pycache__/
 *.pyc
+*.pdf
+README-Quant Stock Picker.*
+.codebuddy/
