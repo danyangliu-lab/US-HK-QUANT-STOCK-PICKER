@@ -15,7 +15,7 @@ from .institutional import fetch_institutional_data
 from .news import NewsContext, fetch_news, format_news_for_prompt
 from .scoring import compute_tech_features, merge_scores, score_growth_engine, score_leverage_engine, score_smallcap_engine
 from .sentiment import fetch_social_sentiment
-from .tracker import TrackingResult, update_tracking
+from .tracker import BENCHMARK_TICKERS, TrackingResult, update_tracking
 
 logger = logging.getLogger(__name__)
 
@@ -171,8 +171,8 @@ def run_daily_pipeline(cfg: StrategyConfig, llm_cfg: LLMConfig, out_dir: str = "
 
     tech = compute_tech_features(prices, volumes, fundamentals)
 
-    growth = score_growth_engine(cfg.growth_tickers, tech, fundamentals)
-    leverage = score_leverage_engine(cfg.leverage_etf_tickers, tech, fundamentals, cfg.leverage_underlying_map, cfg.leverage_index_map)
+    growth = score_growth_engine(cfg.watchlist_growth_tickers, tech, fundamentals)
+    leverage = score_leverage_engine(cfg.watchlist_leverage_tickers, tech, fundamentals, cfg.leverage_underlying_map, cfg.leverage_index_map)
     smallcap = score_smallcap_engine(cfg.smallcap_tickers, tech, fundamentals)
     merged = merge_scores(growth, leverage, smallcap).scores
 
@@ -316,8 +316,28 @@ def run_daily_pipeline(cfg: StrategyConfig, llm_cfg: LLMConfig, out_dir: str = "
     weights.rename("target_weight").to_csv(out_path / f"target_weights_{ts}.csv", encoding="utf-8-sig")
     diff_report.to_csv(out_path / f"diff_report_{ts}.csv", encoding="utf-8-sig")
 
-    # 组合收益跟踪
-    tracking = update_tracking(weights, md.prices, out_path)
+    # 组合收益跟踪（含基准指数对比）
+    benchmark_prices: dict[str, float] = {}
+    for bm_ticker in BENCHMARK_TICKERS:
+        if bm_ticker in md.prices.columns:
+            px = md.prices[bm_ticker].dropna()
+            if not px.empty:
+                benchmark_prices[bm_ticker] = float(px.iloc[-1])
+    if not benchmark_prices:
+        # 基准指数不在 all_tickers 中，单独用 yfinance 获取最新价
+        try:
+            import yfinance as yf
+            for bm_ticker in BENCHMARK_TICKERS:
+                try:
+                    t = yf.Ticker(bm_ticker)
+                    hist = t.history(period="5d", auto_adjust=True)
+                    if hist is not None and not hist.empty and "Close" in hist.columns:
+                        benchmark_prices[bm_ticker] = float(hist["Close"].dropna().iloc[-1])
+                except Exception as e:
+                    logger.warning("基准指数 %s 价格获取失败: %s", bm_ticker, e)
+        except ImportError:
+            pass
+    tracking = update_tracking(weights, md.prices, out_path, benchmark_prices=benchmark_prices)
 
     # ── 我的持仓：评分 + 投资建议 ──
     # 持仓池用更宽松的数据过滤（至少5天即可），确保所有实际持仓都出现在报告中
@@ -359,11 +379,20 @@ def run_daily_pipeline(cfg: StrategyConfig, llm_cfg: LLMConfig, out_dir: str = "
                 else:
                     pf_name_map[t] = t
 
-            # LLM event_score 融合
-            pf_llm_map = batch_event_score(
-                pf_merged.index.tolist(), pf_merged, pf_fundamentals,
-                llm_cfg, cfg.leverage_sector_desc, news_ctx=news_ctx,
-            )
+            # LLM event_score 融合（复用自选池已有结果，仅补充调用未覆盖的持仓股）
+            pf_already = {t: llm_map[t] for t in pf_merged.index if t in llm_map}
+            pf_need_call = [t for t in pf_merged.index if t not in llm_map]
+            if pf_need_call:
+                logger.info("持仓池复用自选池LLM结果 %d 只，补充调用 %d 只: %s",
+                            len(pf_already), len(pf_need_call), pf_need_call)
+                pf_extra = batch_event_score(
+                    pf_need_call, pf_merged, pf_fundamentals,
+                    llm_cfg, cfg.leverage_sector_desc, news_ctx=news_ctx,
+                )
+                pf_already.update(pf_extra)
+            else:
+                logger.info("持仓池全部复用自选池LLM结果（%d 只），无需额外调用", len(pf_already))
+            pf_llm_map = pf_already
             pf_signal = _apply_llm_fusion(pf_merged, pf_llm_map, cfg)
             pf_signal.insert(0, "name", pf_signal.index.map(pf_name_map))
             pf_signal = pf_signal.sort_values("final_score", ascending=False)

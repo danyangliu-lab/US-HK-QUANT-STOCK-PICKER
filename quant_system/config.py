@@ -138,6 +138,16 @@ class StrategyConfig:
         return list(dict.fromkeys(self.portfolio_stock_tickers + self.portfolio_leverage_tickers))
 
     @property
+    def watchlist_growth_tickers(self) -> list[str]:
+        """成长自选池 + 持仓个股，去重保序（确保所有持仓股都在自选评分范围内）"""
+        return list(dict.fromkeys(self.growth_tickers + self.portfolio_stock_tickers))
+
+    @property
+    def watchlist_leverage_tickers(self) -> list[str]:
+        """杠杆自选池 + 持仓杠杆ETF，去重保序（确保所有持仓杠杆ETF都在自选评分范围内）"""
+        return list(dict.fromkeys(self.leverage_etf_tickers + self.portfolio_leverage_tickers))
+
+    @property
     def all_tickers(self) -> list[str]:
         ordered = (
             self.growth_tickers

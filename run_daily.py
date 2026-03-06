@@ -117,6 +117,15 @@ def main() -> None:
         print("=" * 90)
         print(f"  本期收益: {tk.period_return * 100:+.2f}%")
         print(f"  累计收益: {tk.cumulative_return * 100:+.2f}%")
+        # 基准指数对比
+        if tk.benchmarks:
+            print("\n  基准指数对比:")
+            for bm in tk.benchmarks:
+                excess = tk.period_return - bm.period_return
+                cum_excess = tk.cumulative_return - bm.cumulative_return
+                print(f"    {bm.name}({bm.ticker}): 本期 {bm.period_return * 100:+.2f}%  "
+                      f"累计 {bm.cumulative_return * 100:+.2f}%  "
+                      f"| 超额: 本期 {excess * 100:+.2f}%  累计 {cum_excess * 100:+.2f}%")
         if not tk.holding_details.empty:
             print("\n  持仓明细:")
             detail = tk.holding_details.copy()

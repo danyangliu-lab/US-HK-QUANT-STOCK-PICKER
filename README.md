@@ -24,8 +24,8 @@
     ├── dcf.py                    # DCF 折现现金流估值（CAPM→WACC→5年FCF预测→终值→三场景→敏感性矩阵→评分融合）
     ├── report.py                 # 格式化研报生成（投资摘要→个股分析→DCF汇总→Top推荐→组合分析→风险提示，支持LLM增强）
     ├── moomoo_sync.py            # moomoo (富途) 持仓/自选股同步（通过 futu-api 连接 OpenD 网关）
-    ├── tracker.py                # 组合收益跟踪（持仓快照 + 区间收益 + 累计收益）
-    └── engine.py                 # 主流水线（数据→打分→分析师评级→机构/做空→DCF估值→新闻→LLM融合→选股→权重→持仓建议→整体分析→研报→跟踪→输出）
+    ├── tracker.py                # 组合收益跟踪（持仓快照 + 区间收益 + 累计收益 + 基准指数对比）
+    └── engine.py                 # 主流水线（数据→打分→分析师评级→机构/做空→DCF估值→新闻→LLM融合→选股→权重→持仓建议→整体分析→研报→收益跟踪(含基准)→输出）
 ```
 
 ---
@@ -52,6 +52,7 @@
 | 持仓杠杆ETF | 杠杆引擎 | 当前实际持有的杠杆 ETF（具体列表见 `config.py → portfolio_leverage_tickers`） |
 
 - 持仓池与自选池**共享数据下载**（`all_tickers` 自动去重），但**独立打分**
+- **持仓股自动加入自选池**：`portfolio_stock_tickers` 自动合并到成长池（`watchlist_growth_tickers`），`portfolio_leverage_tickers` 自动合并到杠杆池（`watchlist_leverage_tickers`），确保所有持仓股参与自选池的完整评分流程，无需手动重复维护
 - 持仓池除计算量化分数外，还通过 LLM 生成每只股票的**投资建议**（加仓/持有/减仓/清仓）和**整体组合分析**（风险/调仓/关注点/总仓位建议）
 - 输出保存至 `portfolio_advice_YYYYMMDD.csv` 和 `portfolio_overall_YYYYMMDD.txt`
 
@@ -109,9 +110,9 @@
    └─ 输出 DataFrame，行=ticker，列=特征
 
 3. 三引擎打分 + 引擎内独立拉伸 (scoring.py)
-   ├─ 成长+趋势引擎 → score_growth_engine()
+   ├─ 成长+趋势引擎 → score_growth_engine()（自动包含持仓个股）
    ├─ 小盘投机引擎 → score_smallcap_engine()
-   ├─ 杠杆引擎 → score_leverage_engine()
+   ├─ 杠杆引擎 → score_leverage_engine()（自动包含持仓杠杆ETF）
    ├─ 每个引擎内部独立幂次拉伸 → merge_scores()
    └─ VIX 情绪因子全局调节（恐慌期压分/贪婪期加分）
 
@@ -161,7 +162,8 @@
    └─ 与昨日信号对比生成 diff
 
 8. 组合收益跟踪 (tracker.py)
-   └─ 持仓快照 → 区间收益 → 累计收益
+   ├─ 持仓快照 → 区间收益 → 累计收益
+   └─ 基准指数对比（纳斯达克100 QQQ / 标普500 SPY）→ 超额收益计算
 
 9. 持仓股票池独立评分 + 投资建议 + 整体分析 (engine.py + llm.py)
    ├─ 持仓个股 → 成长引擎打分，持仓杠杆ETF → 杠杆引擎打分
@@ -629,7 +631,7 @@ weight = raw / sum(raw)                        # 归一化
 
 ## 13. 组合收益跟踪
 
-`tracker.py` 内置组合收益跟踪模块，持续监控目标仓位表现。
+`tracker.py` 内置组合收益跟踪模块，持续监控目标仓位表现，并与基准指数（纳斯达克100 QQQ / 标普500 SPY）对比。
 
 ### 工作流程
 
@@ -639,11 +641,27 @@ weight = raw / sum(raw)                        # 归一化
 2. 用当前最新价格计算上一期每个持仓的区间收益
 3. 加权汇总得到本期组合收益
 4. 累计收益 = (1 + 上期累计) × (1 + 本期收益) - 1
-5. 记录本期新持仓快照（ticker / 权重 / 入场价格）
-6. 保存到 portfolio_history.csv
+5. 获取基准指数（QQQ/SPY）最新价格，计算同期及累计涨跌幅
+6. 计算超额收益 = 组合收益 - 基准指数收益
+7. 记录本期新持仓快照（ticker / 权重 / 入场价格）
+8. 保存到 portfolio_history.csv + benchmark_history.csv
 ```
 
+### 基准指数对比
+
+| 基准 | Ticker | 说明 |
+|------|--------|------|
+| 纳斯达克100 | `QQQ` | Invesco QQQ Trust，跟踪纳斯达克100指数 |
+| 标普500 | `SPY` | SPDR S&P 500 ETF Trust，跟踪标普500指数 |
+
+- 基准指数与组合使用**相同时间区间**（同一 snapshot 间隔），确保对比公平
+- 累计收益同样采用链式复利公式
+- 自动计算**超额收益**（本期 & 累计），直观展示组合是否跑赢大盘
+- 基准价格获取：优先从已下载行情中提取，否则单独通过 yfinance 获取近5天数据
+
 ### 持久化字段
+
+**组合历史** (`portfolio_history.csv`)：
 
 | 字段 | 说明 |
 |------|------|
@@ -653,6 +671,17 @@ weight = raw / sum(raw)                        # 归一化
 | `entry_price` | 入场价格（当日最新收盘价） |
 | `period_return` | 本期组合加权收益率 |
 | `cumulative_return` | 从首次跟踪开始的累计收益率 |
+
+**基准历史** (`benchmark_history.csv`)：
+
+| 字段 | 说明 |
+|------|------|
+| `snapshot_date` | 快照日期 |
+| `ticker` | 基准指数代码（QQQ / SPY） |
+| `name` | 基准名称（纳斯达克100 / 标普500） |
+| `entry_price` | 基准价格（当日最新收盘价） |
+| `period_return` | 本期基准涨跌幅 |
+| `cumulative_return` | 基准累计涨跌幅 |
 
 ### 换仓处理
 
@@ -814,7 +843,7 @@ CROSS_VALIDATION_MODE=cross    # cross / avg / primary
 1. **自选观察池评分表**：name / engine / quant_score / event_score / analyst_rating / final_score / action，按 final_score 降序
 2. **AI推荐目标权重**：前15名持仓及其百分比权重
 3. **信号变动**：与昨日信号对比（NEW / BUY→REDUCE 等）
-4. **AI推荐组合收益跟踪**：本期收益 / 累计收益 / 各持仓明细（入场价、现价、个股收益率、加权贡献）
+4. **AI推荐组合收益跟踪**：本期收益 / 累计收益 / 基准指数对比（QQQ纳斯达克100 + SPY标普500 本期&累计涨跌幅 + 超额收益） / 各持仓明细（入场价、现价、个股收益率、加权贡献）
 
 **💼 我的持仓（持仓股票池）：**
 5. **我的持仓评分与建议**：name / engine / quant_score / final_score / action / advice_action / advice_confidence / advice_reason
@@ -840,6 +869,7 @@ CROSS_VALIDATION_MODE=cross    # cross / avg / primary
 | `dcf_valuation_YYYYMMDD.csv` | DCF 估值汇总（现价/Bear/Base/Bull/上涨空间/WACC/FCF/DCF评分） |
 | `research_report_YYYYMMDD.md` | 格式化研报（--report 时生成，含投资摘要/个股分析/DCF汇总/Top推荐/组合分析/风险提示） |
 | `portfolio_history.csv` | AI推荐组合持仓快照与收益跟踪历史（持久化） |
+| `benchmark_history.csv` | 基准指数（QQQ/SPY）价格快照与收益跟踪历史（持久化） |
 
 ---
 
