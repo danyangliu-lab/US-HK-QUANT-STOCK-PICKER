@@ -515,6 +515,11 @@ def merge_scores(*engine_dfs: pd.DataFrame) -> ScoreOutput:
 
     merged = pd.concat(stretched_dfs, axis=0)
     merged = merged.sort_values("quant_score", ascending=False)
+    # 去除因 ticker 同时出现在多个引擎列表中导致的重复索引（保留分数最高的一行）
+    if merged.index.duplicated().any():
+        logger.warning("检测到 %d 个重复 ticker（可能同时出现在多个引擎），去重保留最高分",
+                       merged.index.duplicated().sum())
+        merged = merged[~merged.index.duplicated(keep="first")]
     diag_cols = [
         "engine", "trend_score", "fund_score", "quality_score", "growth_score", "index_score",
         "explosion_score", "flow_score", "valuation_score", "hard_filter_pass", "annual_vol",

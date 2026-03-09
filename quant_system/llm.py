@@ -144,6 +144,11 @@ def _build_prompt(
     news_text: str = "",
 ) -> str:
     annual_vol_raw = quant_row.get("annual_vol", None)
+    if isinstance(annual_vol_raw, (dict, pd.Series)):
+        try:
+            annual_vol_raw = next(iter(annual_vol_raw.values())) if isinstance(annual_vol_raw, dict) else annual_vol_raw.iloc[0]
+        except Exception:
+            annual_vol_raw = None
     annual_vol_str = f"{float(annual_vol_raw):.2%}" if annual_vol_raw is not None and pd.notna(annual_vol_raw) else "数据不足"
     engine = str(quant_row.get("engine", "unknown"))
 
@@ -662,6 +667,11 @@ def _build_advice_prompt(
     news_text: str = "",
 ) -> str:
     annual_vol_raw = quant_row.get("annual_vol", None)
+    if isinstance(annual_vol_raw, (dict, pd.Series)):
+        try:
+            annual_vol_raw = next(iter(annual_vol_raw.values())) if isinstance(annual_vol_raw, dict) else annual_vol_raw.iloc[0]
+        except Exception:
+            annual_vol_raw = None
     annual_vol_str = f"{float(annual_vol_raw):.2%}" if annual_vol_raw is not None and pd.notna(annual_vol_raw) else "数据不足"
     engine = str(quant_row.get("engine", "unknown"))
     quant_score = _to_float(quant_row.get("quant_score", 0.0))

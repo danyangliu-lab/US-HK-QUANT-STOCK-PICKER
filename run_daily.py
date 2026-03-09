@@ -56,19 +56,32 @@ def main() -> None:
                         help="从 moomoo (富途) 同步持仓和自选股（需本地运行 OpenD）")
     parser.add_argument("--sync-moomoo-portfolio-only", action="store_true",
                         help="仅同步 moomoo 持仓（不同步自选股）")
+    parser.add_argument("--sync-longbridge", action="store_true",
+                        help="从长桥 LongPort 同步持仓和自选股（云端API，无需本地网关）")
+    parser.add_argument("--sync-longbridge-portfolio-only", action="store_true",
+                        help="仅同步长桥持仓（不同步自选股）")
     parser.add_argument("--report", action="store_true",
                         help="生成格式化研报（Markdown + DCF 估值汇总 CSV）")
     args = parser.parse_args()
 
     cfg = default_config()
 
-    # moomoo 同步
+    # moomoo 同步（旧方案，保留向后兼容）
     if args.sync_moomoo or args.sync_moomoo_portfolio_only:
         from quant_system.moomoo_sync import MoomooConfig, sync_from_moomoo
         moomoo_cfg = MoomooConfig.from_env()
         if args.sync_moomoo_portfolio_only:
             moomoo_cfg.sync_watchlist = False
         cfg = sync_from_moomoo(cfg, moomoo_cfg)
+
+    # 长桥同步（新方案，推荐）
+    if args.sync_longbridge or args.sync_longbridge_portfolio_only:
+        from quant_system.longbridge_sync import LongbridgeConfig, sync_from_longbridge
+        lb_cfg = LongbridgeConfig.from_env()
+        if args.sync_longbridge_portfolio_only:
+            lb_cfg.sync_portfolio = True
+            lb_cfg.watchlist_json_path = ""
+        cfg = sync_from_longbridge(cfg, lb_cfg)
     llm_cfg = LLMConfig.from_env()
     if args.llm:
         llm_cfg.enabled = True

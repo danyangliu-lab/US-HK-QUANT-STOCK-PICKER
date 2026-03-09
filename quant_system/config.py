@@ -1,6 +1,68 @@
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass, field
+from typing import Optional
+
+# ── 动态股票池覆盖文件（由 universe_builder.py 生成）──
+_GROWTH_OVERRIDE_FILE = os.path.expanduser(
+    "~/.openclaw/workspace/data/growth_tickers_override.json"
+)
+
+
+def _load_dynamic_growth_tickers() -> Optional[list[str]]:
+    """尝试从动态覆盖文件加载成长池。
+    如果文件存在且有效，返回 ticker 列表；否则返回 None（回退到硬编码默认值）。
+    """
+    if not os.path.exists(_GROWTH_OVERRIDE_FILE):
+        return None
+    try:
+        with open(_GROWTH_OVERRIDE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        tickers = data.get("growth_tickers", [])
+        if tickers and isinstance(tickers, list) and len(tickers) >= 10:
+            return tickers
+    except Exception:
+        pass
+    return None
+
+
+def _load_dynamic_sector_map() -> dict[str, str]:
+    """从动态覆盖文件加载 sector_map 增量。"""
+    if not os.path.exists(_GROWTH_OVERRIDE_FILE):
+        return {}
+    try:
+        with open(_GROWTH_OVERRIDE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("sector_map", {})
+    except Exception:
+        return {}
+
+
+# 硬编码默认成长池（fallback）
+_DEFAULT_GROWTH_TICKERS = [
+    # 原成长
+    "PLTR", "COHR", "NBIS", "CLS", "LITE", "VRT", "GEV",
+    # 高增速大市值（成长逻辑）
+    "NVDA", "AMD", "MU",
+    # 新增自选
+    "SNDK", "CNQ",
+    # 新增自选 - 工业/矿业成长
+    "ALM", "IPGP",
+    # 新增自选 - 半导体封测/油服
+    "KLIC", "ASX", "AMKR", "PUMP",
+    # 新增自选 - 国防/无人机
+    "KTOS", "AVAV",
+    # 新增自选 - 资源/国防
+    "SCCO", "ALB", "LMT",
+    # 大市值（统一成长+趋势逻辑评估）
+    "AAPL", "MSFT", "AMZN", "AVGO", "ORCL", "XLE", "B",
+    # 新增自选 - 光通信/特种材料/可观测性/铜矿
+    "DY", "ATI", "FN", "COPX",
+    # 港股
+    "0700.HK", "9988.HK", "2706.HK",
+]
 
 
 @dataclass
@@ -14,43 +76,26 @@ class StrategyConfig:
     quant_weight: float = 0.8
     llm_weight: float = 0.2
 
-    # 风控（激进风格：放宽单票和杠杆上限）
-    max_weight_growth: float = 0.12
-    max_weight_leverage: float = 0.10
-    max_weight_smallcap: float = 0.06       # 小盘投机单票上限（小仓位高赔率）
-    max_smallcap_total: float = 0.15        # 小盘投机池总仓位上限
-    max_industry_weight: float = 0.40
-    max_leverage_etf_total: float = 0.25
+    # 风控（小资金激进模式：~SGD 2000 / ~USD 1500）
+    # 核心策略: 极度集中(≤3只) + 高弹性 + 杠杆ETF为主 + 日内短线
+    max_weight_growth: float = 0.60         # 单票上限60%（集中火力，3只平分即33%）
+    max_weight_leverage: float = 0.60       # 杠杆ETF也允许重仓
+    max_weight_smallcap: float = 0.40       # 小盘投机加大仓位（小资金博高赔率）
+    max_smallcap_total: float = 0.50        # 小盘投机池总仓位放开
+    max_industry_weight: float = 0.80       # 行业集中度放开（集中在最强赛道）
+    max_leverage_etf_total: float = 0.80    # 可以全仓杠杆ETF（小资金博弹性）
 
-    # 选股阈值（Top-N + 最低分双重机制）
-    top_n_buy: int = 12
-    min_score_to_buy: float = 55
-    min_score_to_hold: float = 45
+    # 选股阈值（极度集中: 只选Top 3）
+    top_n_buy: int = 3                      # 只买评分最高的3只
+    min_score_to_buy: float = 60            # 买入门槛提高到60（只买最强）
+    min_score_to_hold: float = 50           # 持仓门槛也提高
 
     # ── 自选观察池 ──
-    # 成长池：统一使用成长+趋势引擎评估所有个股
-    growth_tickers: list[str] = field(default_factory=lambda: [
-        # 原成长
-        "PLTR", "COHR", "NBIS", "CLS", "LITE", "VRT", "GEV",
-        # 高增速大市值（成长逻辑）
-        "NVDA", "AMD", "MU",
-        # 新增自选
-        "SNDK", "CNQ",
-        # 新增自选 - 工业/矿业成长
-        "ALM", "IPGP",
-        # 新增自选 - 半导体封测/油服
-        "KLIC", "ASX", "AMKR", "PUMP",
-        # 新增自选 - 国防/无人机
-        "KTOS", "AVAV",
-        # 新增自选 - 资源/国防
-        "SCCO", "ALB", "LMT",
-        # 大市值（统一成长+趋势逻辑评估）
-        "AAPL", "MSFT", "AMZN", "AVGO", "ORCL", "XLE", "B",
-        # 新增自选 - 光通信/特种材料/可观测性/铜矿
-        "DY", "ATI", "FN", "COPX",
-        # 港股
-        "0700.HK", "9988.HK", "2706.HK",
-    ])
+    # 成长池：优先从 dynamic_universe 动态加载，否则回退到硬编码默认值
+    # 动态池由 universe_builder.py 每周自动生成（弹性优先选股）
+    growth_tickers: list[str] = field(
+        default_factory=lambda: _load_dynamic_growth_tickers() or list(_DEFAULT_GROWTH_TICKERS)
+    )
     # 杠杆ETF池（纯趋势+波动率引擎）
     leverage_etf_tickers: list[str] = field(default_factory=lambda: [
         "SOXL", "DFEN", "LITX", "SNXX", "7747.HK", "7709.HK",
@@ -64,16 +109,9 @@ class StrategyConfig:
         "ONDS", "AUR", "CRCL",
     ])
 
-    # ── 持仓股票池（当前实际持仓，会额外生成投资建议）──
-    portfolio_stock_tickers: list[str] = field(default_factory=lambda: [
-        "CLS", "XLE", "ORCL", "AMD", "COHR", "B",
-        "CNQ", "ALM",
-        "2706.HK",
-    ])
-    portfolio_leverage_tickers: list[str] = field(default_factory=lambda: [
-        "7747.HK", "LMTL", "KTUP", "7709.HK", "ONDL", "SNXX", "LITX",
-        "AVXX",
-    ])
+    # ── 持仓股票池（新账户，初始为空，开仓后会自动更新）──
+    portfolio_stock_tickers: list[str] = field(default_factory=lambda: [])
+    portfolio_leverage_tickers: list[str] = field(default_factory=lambda: [])
 
     # 杠杆ETF → 底层股票映射（有底层的会引入底层基本面+技术面）
     leverage_underlying_map: dict[str, str] = field(default_factory=lambda: {
@@ -131,6 +169,8 @@ class StrategyConfig:
         "LITX": "Leveraged", "SNXX": "Leveraged",
         "ONDL": "Leveraged", "KTUP": "Leveraged", "AVXX": "Leveraged", "LMTL": "Leveraged",
         "7747.HK": "Leveraged", "7709.HK": "Leveraged",
+        # 动态加载的行业映射（来自 universe_builder.py）
+        **_load_dynamic_sector_map(),
     })
 
     @property
